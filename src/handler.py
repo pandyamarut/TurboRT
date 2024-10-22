@@ -6,7 +6,15 @@ from transformers import PreTrainedTokenizerBase
 from tensorrt_llm import LLM, SamplingParams
 from huggingface_hub import login
 from tensorrt_llm.hlapi import BuildConfig, KvCacheConfig, QuantConfig, QuantAlgo
+import logging
+from huggingface_hub import HfApi
 
+
+#logging
+logger = logging.getLogger(__name__)
+
+
+#Accept huggingface_token
 hf_token = os.environ["HF_TOKEN"]
 login(token=hf_token)
 
@@ -28,7 +36,9 @@ class TRTLLMEngine:
         self.llm = LLM(model=model_path, enable_build_cache=True, kv_cache_config=KvCacheConfig(), build_config=BuildConfig())
     
     def save_engine(self, path: str):
+        logger.info("Save Engine...")
         self.llm.save(path)
+        logger.info("...Engine Saved")
     
 
  
@@ -51,8 +61,26 @@ async def handler(job: Dict):
     """Handler function that will be used to process jobs."""
     job_input = job['input']
     path = job_input.get('path', "/workspace/model")
-    worker.save_engine(path)
-    return {"status": "success", "message": "engine saved successfully"}
+    push_to_hub = job.get('push_to_hf', True)
+    hf_repo_id = job.get("hf_repo_id")
+    
+    try:
+        worker.save_engine(path)
+        if push_to_hub == True:
+            api = HfApi(token=os.environ["HF_TOKEN"])
+            api.upload_folder(
+                folder_path=path,
+                repo_id=hf_repo_id,
+                repo_type="model",
+            )
+            logger.info("Tensorrt-LLM Engine pushed to the Hub.")
+            return {"status": "success", "message": "engine saved and pushed to HF successfully"}
+        else:
+            logger.info(f"Engine saved locally at {path}")
+            return {"status": "success", "message": "engine saved successfully"}
+    except: 
+        return {"status": "error", "message": "errored"}
+            
     
 
 runpod.serverless.start({"handler": handler, "return_aggregate_stream": True})
